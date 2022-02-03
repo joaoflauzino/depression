@@ -41,6 +41,7 @@ from sklearn.model_selection import cross_validate
 # Avaliação
 from sklearn.metrics import accuracy_score
 from sklearn.metrics import precision_score
+from sklearn.metrics import roc_auc_score
 from sklearn.metrics import recall_score
 from sklearn.metrics import f1_score
 from sklearn.metrics import confusion_matrix
@@ -69,10 +70,26 @@ class FrameWorkFlauzino(object):
         self.modelos = {}
 
 
+    def relatorio_shap(self, model: GridSearchCV, X_treino: pd.DataFrame, algoritmo: str) -> None:
+        """Função responsável por executar o shap"""
+        explainer = shap.Explainer(model)
+        shap_values = explainer(X_treino)
+        print(f' Exibindo shap values para {algoritmo}')
+        shap.plots.beeswarm(shap_values)
+
+    def registra_modelos(self, model: sklearn.pipeline.Pipeline, modelo: str) -> None:
+        """Função responsável por salvar modelo"""
+        try:
+            joblib.dump(model, f'modelos_salvos/{modelo}.pkl')
+        except:
+            raise('Falha ao salvar modelo')
+        return None
+
+
     def reamostragem(self, estrategia: str) -> None:
         """Método responsável por aplicar oversample ou undersample"""
-        X_reamostrado, y_reamostrado = pipe_imb(steps=[(estrategia, self.sample[estrategia])]).fit_resample(self.X, self.Y)
-        X_reamostrado_renomeado = pd.DataFrame(X_reamostrado, columns=self.X.columns)
+        X_reamostrado, y_reamostrado = pipe_imb(steps=[(estrategia, self.sample[estrategia])]).fit_resample(self.split["X"], self.split["y"])
+        X_reamostrado_renomeado = pd.DataFrame(X_reamostrado, columns=self.split["X"].columns)
         self.split["X"] = X_reamostrado_renomeado
         self.split["y"] = y_reamostrado
         return None
@@ -94,7 +111,7 @@ class FrameWorkFlauzino(object):
         
         # Criando pipeline para variáveis categóricos
         transformador_categorico = Pipeline(steps=[
-                                                ("estratégia_categóricas", self.estrategia_categoricas[estrategia_variaveis_categoricas])
+                                                ("estrategia_categoricas", self.estrategia_categoricas[estrategia_variaveis_categoricas])
                                             ])
         
         # Concatenando pipelines
@@ -116,7 +133,7 @@ class FrameWorkFlauzino(object):
         pipeline_pre_processamento_treino = pipeline_pre_processamento.fit(self.x_treino, self.y_treino)
         # Transformando resultado do pipeline em dataframe novamente
         variaveis_categoricas = pipeline_pre_processamento_treino.named_steps['pre-processamento'].transformers_[0][2]
-        categoricas = pipeline_pre_processamento_treino.named_steps['pre-processamento'].transformers_[0][1]['categoricas'].get_feature_names()
+        categoricas = pipeline_pre_processamento_treino.named_steps['pre-processamento'].transformers_[0][1]['estrategia_categoricas'].get_feature_names()
         variaveis_numericas = pipeline_pre_processamento_treino.named_steps['pre-processamento'].transformers_[1][2]
         variaveis_modelo = list(categoricas) + variaveis_numericas
         X_treino_pre_processado = pd.DataFrame(pipeline_pre_processamento_treino.transform(self.x_treino), columns = variaveis_modelo)
@@ -132,16 +149,16 @@ class FrameWorkFlauzino(object):
             # Executando busca dos melhores parâmetros
             print(f'Treinando {alg.__class__.__name__}...')
             model_grid = GridSearchCV(estimator=model_kfold, param_grid=params[alg.__class__.__name__], cv=k, refit=True, scoring='precision')
-            model_grid.fit(X_treino_pre_processado, y_treino)
+            model_grid.fit(X_treino_pre_processado, self.y_treino)
             print(f'Melhores parâmetros: {model_grid.best_params_}')
             print(f'Melhores resultados: {model_grid.best_score_}')
             # Capturando melhor modelo
             model = model_grid.best_estimator_
             # Aplicando shap
-            # if alg.__class__.__name__ in ['GradientBoostingClassifier']:
-            #     relatorio_shap(model[0], X_treino_pre_processado, alg.__class__.__name__)
-            # # Registrando modelo
-            # registra_modelos(model, alg.__class__.__name__)
+            if alg.__class__.__name__ in ['GradientBoostingClassifier']:
+                self.relatorio_shap(model[0], X_treino_pre_processado, alg.__class__.__name__)
+            # Registrando modelo
+            self.registra_modelos(model, alg.__class__.__name__)
             # Testando modelo
             predicoes = model.predict(X_teste_pre_processado)
             # Registrando resultados
@@ -149,6 +166,34 @@ class FrameWorkFlauzino(object):
                 self.modelos[alg.__class__.__name__][j] = self.metricas[j](self.y_teste, predicoes)
         
         return None
+
+    def gerando_relatorio(self) -> None:
+        """Função responsável por gerar comparativos entre modelos"""
+        fig, axs = plt.subplots(nrows=2, ncols =2 , figsize=(20,10))
+        plt.subplots_adjust(hspace = 0.3)
+        
+        # Transformando em um dataframe
+        resultados_dataframe = pd.melt(pd.DataFrame.from_dict(self.modelos).reset_index(), id_vars=['index'], 
+                                    value_vars=['DecisionTreeClassifier', 'RandomForestClassifier', 'GradientBoostingClassifier', 'LogisticRegression']
+                                    )
+        
+        metricas = [i for i in resultados_dataframe['index'].unique() if i != 'matriz']
+        eixo_x = resultados_dataframe['variable'].unique()
+        posicao_inicial = 0
+        count = 0
+        posicao_final = 0
+        for i, metrica in enumerate(metricas):
+            chart = sns.barplot(data=resultados_dataframe.query(f'index == "{metrica}"'), x = 'variable', y = 'value', color="cornflowerblue", ax = axs[posicao_inicial,posicao_final])
+            chart.set_xticklabels(labels=eixo_x, rotation=0)
+            chart.set_title(metrica)
+            count +=1
+            posicao_final += 1
+            if count == 2:
+                count = 0
+                posicao_inicial +=1
+                posicao_final = 0
+                
+        plt.savefig('resultados.png')
             
 
 
