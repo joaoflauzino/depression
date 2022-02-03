@@ -81,6 +81,7 @@ class FrameWorkFlauzino(object):
         """Função responsável por salvar modelo"""
         try:
             joblib.dump(model, f'modelos_salvos/{modelo}.pkl')
+            print(f'Registrando {modelo} pelo job lib na pasta modelos_salvos')
         except:
             raise('Falha ao salvar modelo')
         return None
@@ -88,15 +89,26 @@ class FrameWorkFlauzino(object):
 
     def reamostragem(self, estrategia: str) -> None:
         """Método responsável por aplicar oversample ou undersample"""
+        print(f'Distribuição antes da reamostragem: \n')
+        print(self.split["y"].value_counts())
         X_reamostrado, y_reamostrado = pipe_imb(steps=[(estrategia, self.sample[estrategia])]).fit_resample(self.split["X"], self.split["y"])
         X_reamostrado_renomeado = pd.DataFrame(X_reamostrado, columns=self.split["X"].columns)
+        print(f'Distribuição da target reamostrada com {estrategia}: \n')
+        print(f'{y_reamostrado.value_counts()}')
         self.split["X"] = X_reamostrado_renomeado
         self.split["y"] = y_reamostrado
         return None
 
     def treino_teste(self, pct: float) -> None:
         """Método para quebrar base em treino e teste"""
+        print(f'Quantidade de registros antes da separação de treino e teste: \n')
+        print(f'{self.split["X"].shape[0]} \n')
         self.x_treino, self.x_teste, self.y_treino, self.y_teste = train_test_split(self.split["X"], self.split["y"], test_size=pct)
+        print(f'Quantidade de registros após separação de treino e teste: \n')
+        print(f'X_treino: {self.x_treino.shape[0]} \n')
+        print(f'x_teste: {self.x_teste.shape[0]} \n')
+        print(f'y_treino: {self.y_treino.shape[0]} \n')
+        print(f'y_teste: {self.y_teste.shape[0]} \n')
         return None
 
     def criacao_pipeline(self, variaveis_numericas: list,
@@ -120,6 +132,8 @@ class FrameWorkFlauzino(object):
                                                         ('num', transformador_numerico, variaveis_numericas)
                                         ])
 
+        print(f'Pipeline criado:\n {self.pre_processamento}')
+        
         return None
 
     def execucao_pipeline(self, params: dict, 
@@ -136,8 +150,8 @@ class FrameWorkFlauzino(object):
         categoricas = pipeline_pre_processamento_treino.named_steps['pre-processamento'].transformers_[0][1]['estrategia_categoricas'].get_feature_names()
         variaveis_numericas = pipeline_pre_processamento_treino.named_steps['pre-processamento'].transformers_[1][2]
         variaveis_modelo = list(categoricas) + variaveis_numericas
-        X_treino_pre_processado = pd.DataFrame(pipeline_pre_processamento_treino.transform(self.x_treino), columns = variaveis_modelo)
-        X_teste_pre_processado = pd.DataFrame(pipeline_pre_processamento_treino.transform(self.x_teste), columns = variaveis_modelo)
+        self.X_treino_pre_processado = pd.DataFrame(pipeline_pre_processamento_treino.transform(self.x_treino), columns = variaveis_modelo)
+        self.X_teste_pre_processado = pd.DataFrame(pipeline_pre_processamento_treino.transform(self.x_teste), columns = variaveis_modelo)
 
         # Rodando cada algoritmo para o dado pré-processado
         for alg in algoritmos:
@@ -149,18 +163,18 @@ class FrameWorkFlauzino(object):
             # Executando busca dos melhores parâmetros
             print(f'Treinando {alg.__class__.__name__}...')
             model_grid = GridSearchCV(estimator=model_kfold, param_grid=params[alg.__class__.__name__], cv=k, refit=True, scoring='precision')
-            model_grid.fit(X_treino_pre_processado, self.y_treino)
+            model_grid.fit(self.X_treino_pre_processado, self.y_treino)
             print(f'Melhores parâmetros: {model_grid.best_params_}')
             print(f'Melhores resultados: {model_grid.best_score_}')
             # Capturando melhor modelo
             model = model_grid.best_estimator_
             # Aplicando shap
             if alg.__class__.__name__ in ['GradientBoostingClassifier']:
-                self.relatorio_shap(model[0], X_treino_pre_processado, alg.__class__.__name__)
+                self.relatorio_shap(model[0], self.X_treino_pre_processado, alg.__class__.__name__)
             # Registrando modelo
             self.registra_modelos(model, alg.__class__.__name__)
             # Testando modelo
-            predicoes = model.predict(X_teste_pre_processado)
+            predicoes = model.predict(self.X_teste_pre_processado)
             # Registrando resultados
             for j in avaliadores:
                 self.modelos[alg.__class__.__name__][j] = self.metricas[j](self.y_teste, predicoes)
